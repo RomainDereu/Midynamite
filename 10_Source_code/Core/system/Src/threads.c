@@ -4,7 +4,7 @@
 
 #include "midi_transform.h" //calculate_incoming_midi
 #include "midi_arp.h" //arp_on_tempo_tick
-#include "midi_tempo.h" //tempo_sync_from_save
+#include "midi_tempo.h" // mt_process_pending_tempo_out
 
 #include "threads.h"
 #include "usb_device.h" //MX_USB_DEVICE_Init
@@ -30,9 +30,16 @@ static inline uint32_t display_flag_for_menu(menu_list_t m)
 static osThreadId_t s_display_handle      = NULL;
 static osThreadId_t s_midi_core_handle    = NULL;
 static osThreadId_t s_medium_tasks_handle = NULL;
+static volatile uint32_t s_pending_arp_ticks = 0;
+static volatile uint32_t s_pending_tempo_ticks = 0;
 
 static osEventFlagsId_t s_display_flags;
 static const osEventFlagsAttr_t s_flags_attrs = { .name = "display_flags" };
+
+static uint32_t threads_take_pending_ticks(volatile uint32_t *counter)
+{
+    return __atomic_exchange_n(counter, 0, __ATOMIC_ACQ_REL);
+}
 
 // -------------------------
 // Thread attributes
@@ -85,20 +92,20 @@ static void MidiCoreThread(void *argument)
     {
         calculate_incoming_midi();
 
-
         uint32_t flags = osThreadFlagsWait(MIDI_CORE_FLAG_MASK, osFlagsWaitAny, 1);
-        if ((flags & osFlagsError) != 0) {
-            continue;
-        }
+        (void)flags;
 
-        if ((flags & MIDI_CORE_FLAG_ARP_TICK) != 0) {
+        uint32_t arp_ticks_to_process = threads_take_pending_ticks(&s_pending_arp_ticks);
+        while (arp_ticks_to_process > 0) {
             arp_on_tempo_tick();
+            --arp_ticks_to_process;
         }
 
-        if ((flags & MIDI_CORE_FLAG_TEMPO_OUT) != 0) {
+        uint32_t tempo_ticks_to_process = threads_take_pending_ticks(&s_pending_tempo_ticks);
+        while (tempo_ticks_to_process > 0) {
             mt_process_pending_tempo_out();
+            --tempo_ticks_to_process;
         }
-
     }
 }
 
@@ -145,6 +152,13 @@ void threads_midi_core_set_flags(uint32_t flags)
         return;
     }
 
+    if ((flags & MIDI_CORE_FLAG_ARP_TICK) != 0) {
+        __atomic_fetch_add(&s_pending_arp_ticks, 1, __ATOMIC_RELAXED);
+    }
+    if ((flags & MIDI_CORE_FLAG_TEMPO_OUT) != 0) {
+        __atomic_fetch_add(&s_pending_tempo_ticks, 1, __ATOMIC_RELAXED);
+    }
+
     osThreadFlagsSet(s_midi_core_handle, flags);
 }
 
@@ -154,6 +168,8 @@ void threads_midi_core_notify_tempo_tick_from_isr(void)
         return;
     }
 
+    __atomic_fetch_add(&s_pending_arp_ticks, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_pending_tempo_ticks, 1, __ATOMIC_RELAXED);
     osThreadFlagsSet(s_midi_core_handle, MIDI_CORE_FLAG_ARP_TICK | MIDI_CORE_FLAG_TEMPO_OUT);
 }
 

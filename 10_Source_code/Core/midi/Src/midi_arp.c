@@ -35,9 +35,11 @@ typedef struct {
     uint16_t tick_counter;
     uint16_t gate_tick_counter;
     uint8_t note_on_playing;
+    uint8_t currently_playing_count;
     uint8_t has_played_note;
     uint8_t was_arp_enabled;
     uint8_t swing_phase;
+    midi_note currently_playing_notes[ARP_MAX_NOTES];
 } arp_clock_gate_engine_t;
 
 static arp_input_tracker_t s_input_tracker;
@@ -47,8 +49,6 @@ static arp_clock_gate_engine_t s_clock_gate_engine;
 static arp_note_entry_t s_source_entries[ARP_MAX_NOTES];
 static arp_note_entry_t s_expanded_entries[ARP_MAX_NOTES];
 
-static midi_note last_note_sent = {0x90, 60, 10};
-
 typedef enum {
     ARP_PATTERN_UP = 0,
     ARP_PATTERN_DOWN,
@@ -57,7 +57,8 @@ typedef enum {
     ARP_PATTERN_RANDOM,
     ARP_PATTERN_DOUBLE_UP,
     ARP_PATTERN_DOUBLE_DOWN,
-    ARP_PATTERN_ORDER = 7
+    ARP_PATTERN_ORDER = 7,
+    ARP_PATTERN_ALL = 8
 } arp_pattern_t;
 
 /* ------------------------------- Input tracker ------------------------------- */
@@ -302,6 +303,7 @@ static uint8_t pattern_next_note_index(uint8_t count, uint8_t pattern)
             break;
 
         case ARP_PATTERN_ORDER:
+        case ARP_PATTERN_ALL:
         case ARP_PATTERN_UP:
         default:
             index = pattern_index_up(count);
@@ -339,15 +341,26 @@ static uint8_t pattern_step_is_enabled(void)
 
 static uint16_t clocks_per_step(uint8_t div)
 {
-    static const uint16_t map[7] = {48, 32, 24, 16, 12, 8, 6};
-    return map[div % 7];
+    static const uint16_t map[10] = {192, 96, 64, 48, 32, 24, 16, 12, 8, 6};
+
+    if (div > 9) {
+        div = 9;
+    }
+
+    return map[div];
 }
+
+
+
 
 static uint16_t clock_current_step_ticks(uint16_t clocks_per_step_value)
 {
     uint16_t swing = (uint16_t)(uint8_t)save_get(ARPEGGIATOR_SWING);
 
-    if (swing >= clocks_per_step_value) {
+    if ((clocks_per_step_value > 100) || (swing >= clocks_per_step_value)) {
+        if (swing > 99) {
+            swing = 99;
+        }
         swing = (uint16_t)((clocks_per_step_value * swing + 50) / 100);
     }
 
@@ -364,6 +377,7 @@ static uint16_t clock_current_step_ticks(uint16_t clocks_per_step_value)
 
     return (uint16_t)(2 * (clocks_per_step_value - swing));
 }
+
 
 static uint8_t clock_should_process_step(uint16_t step_ticks_value, uint8_t has_pressed_notes)
 {
@@ -383,18 +397,22 @@ static uint8_t clock_should_process_step(uint16_t step_ticks_value, uint8_t has_
     return 1;
 }
 
-static void clock_send_current_note_off(void)
+static void clock_send_note_off(const midi_note *on_note)
 {
-    midi_note off = last_note_sent;
-    off.status = (uint8_t)(0x80 | (last_note_sent.status & 0x0F));
+    midi_note off = *on_note;
+    off.status = (uint8_t)(0x80 | (on_note->status & 0x0F));
     off.velocity = 0;
     pipeline_final(&off, 3);
 }
 
 static void clock_send_note_off_and_clear_gate(void)
 {
-    clock_send_current_note_off();
+    for (uint8_t i = 0; i < s_clock_gate_engine.currently_playing_count; ++i) {
+        clock_send_note_off(&s_clock_gate_engine.currently_playing_notes[i]);
+    }
+
     s_clock_gate_engine.note_on_playing = 0;
+    s_clock_gate_engine.currently_playing_count = 0;
     s_clock_gate_engine.gate_tick_counter = 0;
 }
 
@@ -418,8 +436,7 @@ static void clock_stop_playing_note(void)
         return;
     }
 
-    clock_send_current_note_off();
-    s_clock_gate_engine.note_on_playing = 0;
+    clock_send_note_off_and_clear_gate();
 }
 
 
@@ -457,6 +474,11 @@ static void arp_clear_tracked_notes(void)
     s_pattern_engine.note_type = 255;
 }
 
+void arp_panic_clear(void)
+{
+    clock_stop_playing_note();
+    arp_clear_tracked_notes();
+}
 
 
 void arp_handle_midi_note(const midi_note *msg)
@@ -585,22 +607,39 @@ void arp_on_tempo_tick(void)
         return;
     }
 
-    const uint8_t index = pattern_next_note_index(count, pattern);
-    const arp_note_entry_t selected_entry = s_expanded_entries[index];
-    const midi_note source_msg = s_input_tracker.active_notes[selected_entry.source_note];
-    const uint8_t source_channel = (uint8_t)(source_msg.status & 0x0F);
+    if (pattern == ARP_PATTERN_ALL) {
+        s_clock_gate_engine.currently_playing_count = 0;
 
-    last_note_sent.status = (uint8_t)((last_note_sent.status & 0xF0) | source_channel);
-    last_note_sent.note = selected_entry.note;
-    last_note_sent.velocity = source_msg.velocity;
+        for (uint8_t i = 0; i < count; ++i) {
+            const arp_note_entry_t selected_entry = s_expanded_entries[i];
+            const midi_note source_msg = s_input_tracker.active_notes[selected_entry.source_note];
+            midi_note on = source_msg;
 
-    midi_note on = last_note_sent;
-    on.status = (uint8_t)(0x90 | (last_note_sent.status & 0x0F));
-    pipeline_final(&on, 3);
+            on.status = (uint8_t)(0x90 | (source_msg.status & 0x0F));
+            on.note = selected_entry.note;
+            pipeline_final(&on, 3);
 
-    last_note_sent = on;
-    s_clock_gate_engine.has_played_note = 1;
-    s_clock_gate_engine.note_on_playing = 1;
+            if (s_clock_gate_engine.currently_playing_count < ARP_MAX_NOTES) {
+                s_clock_gate_engine.currently_playing_notes[s_clock_gate_engine.currently_playing_count] = on;
+                ++s_clock_gate_engine.currently_playing_count;
+            }
+        }
+    } else {
+        const uint8_t index = pattern_next_note_index(count, pattern);
+        const arp_note_entry_t selected_entry = s_expanded_entries[index];
+        const midi_note source_msg = s_input_tracker.active_notes[selected_entry.source_note];
+
+        midi_note on = source_msg;
+        on.status = (uint8_t)(0x90 | (source_msg.status & 0x0F));
+        on.note = selected_entry.note;
+        pipeline_final(&on, 3);
+
+        s_clock_gate_engine.currently_playing_notes[0] = on;
+        s_clock_gate_engine.currently_playing_count = 1;
+    }
+
+    s_clock_gate_engine.has_played_note = (s_clock_gate_engine.currently_playing_count > 0) ? 1 : 0;
+    s_clock_gate_engine.note_on_playing = (s_clock_gate_engine.currently_playing_count > 0) ? 1 : 0;
     s_clock_gate_engine.gate_tick_counter = 0;
     s_clock_gate_engine.swing_phase ^= 1;
 }
@@ -617,9 +656,6 @@ void arp_state_reset(void)
     s_pattern_engine.random_state = 0x9E3779B9;
     memset(&s_clock_gate_engine, 0, sizeof(s_clock_gate_engine));
 
-    last_note_sent.status = 0x90;
-    last_note_sent.note = 60;
-    last_note_sent.velocity = 100;
 }
 
 uint8_t arp_get_pressed_keys(uint8_t *out_notes)

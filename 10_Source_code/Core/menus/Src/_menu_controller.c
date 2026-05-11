@@ -93,8 +93,12 @@ void update_contrast(save_field_t f) {
 
 static inline uint8_t arp_swing_max(uint8_t div_idx)
 {
-    const uint8_t ticks = arp_step_ticks(div_idx);
-    // Max “delay” in ticks is ticks-1 (e.g. 48 -> 47)
+    const uint16_t ticks = arp_step_ticks(div_idx);
+    // For short divisions, swing is tick-based (1..ticks-1).
+    // For long divisions (>100 ticks), swing is percent-like (1..99).
+    if (ticks > 100) {
+        return 99;
+    }
     return (ticks > 0) ? (uint8_t)(ticks - 1) : 0;
 }
 
@@ -117,7 +121,7 @@ void update_arp_swing(save_field_t field)
     s_ui_reload = 1;
 }
 
-// Division editing: wraps 0..6 and resets swing to 50% of the NEW division
+// Division editing: wraps 0..9 and resets swing to 50% of the NEW division
 void update_arp_division(save_field_t field)
 {
     int8_t step = encoder_read_step(&htim4);
@@ -126,19 +130,20 @@ void update_arp_division(save_field_t field)
     int16_t cur  = (int16_t)(uint8_t)save_get(field);
     int16_t next = cur + (int16_t)step;
 
-    while (next < 0)  next += 7;
-    while (next >= 7) next -= 7;
+    while (next < 0)  next += 10;
+    while (next >= 10) next -= 10;
 
     (void)save_modify_u8(field, SAVE_MODIFY_SET, (uint8_t)next);
 
     // Reset swing to 50% (in ticks): ticks/2 (48->24, 32->16, 6->3, etc.)
-    const uint8_t ticks = arp_step_ticks((uint8_t)next);
-    uint8_t swing50 = (uint8_t)(ticks / 2);
+    const uint16_t ticks = arp_step_ticks((uint8_t)next);
+    uint8_t swing50 = (ticks > 100) ? 50 : (uint8_t)(ticks / 2);
     if (swing50 < 1) swing50 = 1; // safety; also enforces “no 0”
     (void)save_modify_u8(ARPEGGIATOR_SWING, SAVE_MODIFY_SET, swing50);
 
     s_ui_reload = 1;
 }
+
 
 
 static void update_arp_length(save_field_t field)

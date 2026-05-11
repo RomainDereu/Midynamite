@@ -161,14 +161,15 @@ void     update_menu();
 // ---------------------
 // Shared arpeggiator timing helpers
 // ---------------------
-// 48 PPQ grid. Divisions: 1/4 1/6 1/8 1/12 1/16 1/24 1/32
-// step ticks:            48   32  24   16    12    8     6
-static inline uint8_t arp_step_ticks(uint8_t div_idx)
+// 48 PPQ grid. Divisions: 1/1 1/2 1/3 1/4 1/6 1/8 1/12 1/16 1/24 1/32
+// step ticks:            192 96  64  48  32  24   16    12    8     6
+static inline uint16_t arp_step_ticks(uint8_t div_idx)
 {
-    static const uint8_t ticks_map[7] = { 48, 32, 24, 16, 12, 8, 6 };
-    if (div_idx > 6) div_idx = 6;
+    static const uint16_t ticks_map[10] = { 192, 96, 64, 48, 32, 24, 16, 12, 8, 6 };
+    if (div_idx > 9) div_idx = 9;
     return ticks_map[div_idx];
 }
+
 
 
 #ifdef UNIT_TEST

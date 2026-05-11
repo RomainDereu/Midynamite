@@ -174,8 +174,13 @@ static void menu_ui_draw_8_steps(const ui_element *e)
 // Note: your controller clamps swing to >= 1, so UI never sees 0 unless old data exists.
 static inline uint8_t arp_swing_percent(uint8_t div_idx, uint8_t swing_ticks)
 {
-    const uint8_t ticks = arp_step_ticks(div_idx);
+    const uint16_t ticks = arp_step_ticks(div_idx);
     if (ticks == 0) return 0;
+
+    if (ticks > 100) {
+        if (swing_ticks > 99) swing_ticks = 99;
+        return swing_ticks;
+    }
 
     const uint8_t maxv = (uint8_t)(ticks - 1);
     if (swing_ticks > maxv) swing_ticks = maxv;
@@ -185,13 +190,14 @@ static inline uint8_t arp_swing_percent(uint8_t div_idx, uint8_t swing_ticks)
     return (uint8_t)(p / ticks);
 }
 
+
 static void menu_ui_draw_swing_percent(const ui_element *e)
 {
     const save_field_t swing_f = (save_field_t)e->save_item;
 
     const uint8_t div_idx = (uint8_t)save_get(ARPEGGIATOR_DIVISION);
-    const uint8_t ticks   = arp_step_ticks(div_idx);
-    const uint8_t maxv    = (ticks > 0) ? (uint8_t)(ticks - 1) : 0;
+    const uint16_t ticks  = arp_step_ticks(div_idx);
+    const uint8_t maxv     = (ticks > 100) ? 99 : ((ticks > 0) ? (uint8_t)(ticks - 1) : 0);
 
     uint8_t swing = (uint8_t)save_get(swing_f);
     if (swing < 1) swing = 1;         // enforce “no 0” even if old save exists
@@ -208,6 +214,7 @@ static void menu_ui_draw_swing_percent(const ui_element *e)
 
     draw_text_ul(buf, e->x, e->y, elem_font(e), ui_is_field_selected(swing_f) ? 1 : 0);
 }
+
 
 // -------------------------
 // 16ch drawing

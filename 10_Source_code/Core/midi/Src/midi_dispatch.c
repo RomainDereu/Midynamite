@@ -6,7 +6,6 @@
  */
 
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "memory_main.h"
@@ -50,6 +49,7 @@ typedef struct {
     uint8_t rr_next_synth;
     uint8_t initialized;
     uint32_t age_counter;
+    uint32_t random_state;
 } dispatch_state_t;
 
 static dispatch_state_t g_dispatch_state;
@@ -66,7 +66,7 @@ static void dispatch_send_on_synth(const midi_note *src_msg, uint8_t synth_chann
 {
     midi_note out = *src_msg;
     midi_change_channel(&out, synth_channel);
-    emit_midi_with_policy(&out);
+    emit_midi(&out);
 
 }
 
@@ -78,7 +78,7 @@ static void dispatch_send_note_off_on_synth(uint8_t note, uint8_t synth_channel)
         .velocity = 0
     };
     midi_change_channel(&off_msg, synth_channel);
-    emit_midi_with_policy(&off_msg);
+    emit_midi(&off_msg);
 }
 
 
@@ -111,7 +111,11 @@ static void dispatch_init_or_reconfigure(dispatch_state_t *state)
     const uint8_t amount_of_synths = (uint8_t)save_get(DISPATCH_AMOUNT_OF_SYNTHS);
     const uint8_t from_channel = (uint8_t)save_get(DISPATCH_FROM_CHANNEL);
     const uint8_t notes_per_synth = (uint8_t)save_get(DISPATCH_NOTES_PER_SYNTH);
-    const uint8_t voice_manage = (uint8_t)save_get(DISPATCH_VOICE_MANAGE);
+    const uint8_t voice_manage_raw = (uint8_t)save_get(DISPATCH_VOICE_MANAGE);
+    const uint8_t voice_manage = (voice_manage_raw <= DISPATCH_VOICE_RANDOM)
+        ? voice_manage_raw
+        : DISPATCH_VOICE_FIRST;
+
 
     const uint8_t capped_synths = (amount_of_synths == 0) ? 1 : ((amount_of_synths > DISPATCH_MAX_SYNTHS) ? DISPATCH_MAX_SYNTHS : amount_of_synths);
 
@@ -139,8 +143,22 @@ static void dispatch_init_or_reconfigure(dispatch_state_t *state)
         state->notes_per_synth = capped_notes;
         state->voice_manage = voice_manage;
         state->initialized = 1;
+        state->random_state = 0x9E3779B9;
     }
 }
+
+static uint32_t dispatch_next_random(dispatch_state_t *state)
+{
+    if (state->random_state == 0) {
+        state->random_state = 0x9E3779B9;
+    }
+
+    state->random_state ^= state->random_state << 13;
+    state->random_state ^= state->random_state >> 17;
+    state->random_state ^= state->random_state << 5;
+    return state->random_state;
+}
+
 
 static int16_t dispatch_pick_voice_to_steal(dispatch_state_t *state)
 {
@@ -158,7 +176,8 @@ static int16_t dispatch_pick_voice_to_steal(dispatch_state_t *state)
     }
 
     if (state->voice_manage == DISPATCH_VOICE_RANDOM) {
-        return active_indexes[rand() % active_count];
+        const uint8_t random_index = (uint8_t)(dispatch_next_random(state) % active_count);
+        return active_indexes[random_index];
     }
 
     uint8_t best_idx = active_indexes[0];
@@ -167,13 +186,6 @@ static int16_t dispatch_pick_voice_to_steal(dispatch_state_t *state)
         const uint8_t cand_idx = active_indexes[i];
         const dispatch_voice_t *best = &state->voices[best_idx];
         const dispatch_voice_t *cand = &state->voices[cand_idx];
-
-        if (state->voice_manage == DISPATCH_VOICE_LAST) {
-            if (cand->age > best->age) {
-                best_idx = cand_idx;
-            }
-            continue;
-        }
 
         if (state->voice_manage == DISPATCH_VOICE_VELOC) {
             if (cand->velocity < best->velocity) {
@@ -193,6 +205,28 @@ static int16_t dispatch_pick_voice_to_steal(dispatch_state_t *state)
 
     return best_idx;
 }
+
+static uint8_t dispatch_should_drop_incoming(const dispatch_state_t *state)
+{
+    return (state->voice_manage == DISPATCH_VOICE_LAST) ? 1 : 0;
+}
+
+
+static uint8_t dispatch_should_steal_for_incoming(const dispatch_state_t *state, int16_t voice_to_drop, uint8_t incoming_velocity)
+{
+    if (voice_to_drop < 0) {
+        return 0;
+    }
+
+    if (state->voice_manage != DISPATCH_VOICE_VELOC) {
+        return 1;
+    }
+
+    const dispatch_voice_t *quietest_voice = &state->voices[(uint8_t)voice_to_drop];
+    return (incoming_velocity > quietest_voice->velocity) ? 1 : 0;
+}
+
+
 
 static void dispatch_drop_voice(dispatch_state_t *state, uint8_t voice_idx)
 {
@@ -273,12 +307,21 @@ uint8_t midi_dispatch_process(midi_note *midi_msg, uint8_t length)
             int16_t target_synth = dispatch_select_synth_round_robin(&g_dispatch_state);
 
             if (target_synth < 0) {
+                if (dispatch_should_drop_incoming(&g_dispatch_state) != 0) {
+                      return 1;
+                  }
+
+
+
                 const int16_t voice_to_drop = dispatch_pick_voice_to_steal(&g_dispatch_state);
-                if (voice_to_drop >= 0) {
+                if (dispatch_should_steal_for_incoming(&g_dispatch_state, voice_to_drop, midi_msg->velocity) != 0) {
                     dispatch_drop_voice(&g_dispatch_state, (uint8_t)voice_to_drop);
+                } else {
+                    return 1;
                 }
                 target_synth = dispatch_select_synth_round_robin(&g_dispatch_state);
             }
+
 
             if (target_synth >= 0) {
                 const int16_t voice_slot = dispatch_find_free_voice_slot(&g_dispatch_state);

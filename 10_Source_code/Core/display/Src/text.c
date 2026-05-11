@@ -278,8 +278,8 @@ static const Message _message = {
 						"MIDI Dispatch",
 						"Settings"},
 	//Arpeggio
-	.division_list = { "1/4", "1/6", "1/8", "1/12", "1/16", "1/24", "1/32" },
-	.arp_patterns = { "Up", "Down", "Up/Down", "Up/Down 2", "Random", "Double Up", "Double Down", "Order"},
+	.division_list = { "1/1", "1/2", "1/3", "1/4", "1/6", "1/8", "1/12", "1/16", "1/24", "1/32" },
+	.arp_patterns = { "Up", "Down", "Up/Down", "Up/Down 2", "Random", "Double Up", "Double Down", "Order", "Block"},
 	.octave_count = { "Error", "1 Octave", "2 Octaves", "3 Octaves", "4 Octaves"},
 };
 

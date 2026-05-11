@@ -18,7 +18,7 @@ void arp_handle_midi_note(const midi_note *msg);
 uint8_t arp_handle_midi_cc64(const midi_note *msg);
 
 void arp_on_tempo_tick(void);
-
+void arp_panic_clear(void);
 
 #ifdef UNIT_TEST
 void arp_state_reset(void);

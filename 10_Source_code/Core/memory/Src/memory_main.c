@@ -61,10 +61,10 @@ const save_limits_t save_limits[SAVE_FIELD_COUNT] = {
 
 
 	[ARPEGGIATOR_CURRENTLY_SENDING]= {      0,       1,          0 },
-	[ARPEGGIATOR_DIVISION]         = {      0,       6,          0 },
+	[ARPEGGIATOR_DIVISION]         = {      0,       9,          3 },
 	[ARPEGGIATOR_GATE]             = {      1,       10,         10 },
 	[ARPEGGIATOR_OCTAVES]          = {      1,       4,          1 },
-	[ARPEGGIATOR_PATTERN]          = {      0,       7,          0 },
+	[ARPEGGIATOR_PATTERN]          = {      0,       8,          0 },
 
 	[ARPEGGIATOR_SWING]            = {      1,       100,        50 },
 	[ARPEGGIATOR_LENGTH]           = {      1,       8,          8 },
@@ -128,17 +128,7 @@ static inline void save_busy_wait_short(void) {
     while (spin--) { /* no-op */ }
 }
 
-static inline int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi) {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
-
-
-
-
 static int32_t save_get_u32(save_field_t field) {
-    if (field < 0 || field >= SAVE_FIELD_COUNT) return 0;
     int32_t *p = u32_fields[field];
     if (!p) return 0;
 
@@ -147,9 +137,7 @@ static int32_t save_get_u32(save_field_t field) {
         save_busy_wait_short();
     }
 
-    int32_t v = *p;
-    const save_limits_t lim = save_limits[field];
-    return clamp_i32(v, lim.min, lim.max);
+    return *p;
 }
 
 static uint8_t split_mask_field_to_index(save_field_t field)
@@ -189,7 +177,6 @@ static uint8_t split_mask_set_slot_value(save_field_t field, uint8_t value)
 }
 
 static uint8_t save_get_8(save_field_t field) {
-    if (field < 0 || field >= SAVE_FIELD_COUNT) return 0;
     uint8_t *p = u8_fields[field];
     if (!p) return 0;
 
@@ -198,15 +185,11 @@ static uint8_t save_get_8(save_field_t field) {
         save_busy_wait_short();
     }
 
-    int32_t v = (int32_t)(*p);
-    const save_limits_t lim = save_limits[field];
-    return (uint8_t)clamp_i32(v, lim.min, lim.max);
+    return *p;
 }
 
 
 int32_t save_get(save_field_t field) {
-    if (field < 0 || field >= SAVE_FIELD_COUNT) return 0;
-
     if (field >= SPLIT_MASK_MODIFY && field <= SPLIT_MASK_DISPATCH) {
         return (int32_t)split_mask_get_slot_value(field);
     }

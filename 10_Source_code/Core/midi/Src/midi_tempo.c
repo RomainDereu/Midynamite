@@ -1,5 +1,5 @@
 /*
- * midi_transform.c
+ * midi_tempo.c
  *
  *  Created on: Sep 5, 2025
  *      Author: Romain Dereu
@@ -9,81 +9,88 @@
 #include "midi_usb.h"
 #include "threads.h"
 
-static uint8_t *mt_send_to_midi_out_cache(void)
-{
-    static uint8_t sending_to_midi_out = 0;
-    return &sending_to_midi_out;
-}
+#define MT_UART_TX_TIMEOUT_MS 1
+
+static uint8_t s_mt_send_to_midi_out = 0;
+static uint8_t s_mt_divider_phase = 0;
+
 
 void set_tempo_bpm(uint32_t bpm)
 {
-    const uint32_t tempo_click_rate = (bpm > 0) ? (6000000 / (bpm * 48)) : 0;
+    if (bpm == 0) {
+        return;
+    }
+
+    const uint32_t tempo_click_rate = 6000000 / (bpm * 48);
+    const uint32_t current_counter = TIM2->CNT;
+
     TIM2->ARR = tempo_click_rate;
+    if (current_counter >= tempo_click_rate) {
+        TIM2->CNT = 0;
+    }
 }
+
+
+
 
 void mt_set_send_to_midi_out(uint8_t send_to_midi_out)
 {
-    *mt_send_to_midi_out_cache() = send_to_midi_out;
+    s_mt_send_to_midi_out = send_to_midi_out;
 }
 
 void tempo_sync_from_save(void)
 {
     set_tempo_bpm(save_get(TEMPO_CURRENT_TEMPO));
     mt_set_send_to_midi_out((uint8_t)save_get(TEMPO_SEND_TO_MIDI_OUT));
+    s_mt_divider_phase = 0;
 }
 
+
+static inline void select_outs_and_send(uint8_t clock_byte)
+{
+    s_mt_send_to_midi_out = (uint8_t)save_get(TEMPO_SEND_TO_MIDI_OUT);
+    UART_HandleTypeDef *uart_list_tempo[2];
+    list_of_UART_to_send_to(s_mt_send_to_midi_out, uart_list_tempo);
+
+    const uint8_t usb_mode = (uint8_t)save_get(SETTINGS_SEND_USB);
+    if ((usb_mode == MIDI_USB_OUT) || (usb_mode == MIDI_USB_THRU_OUT)) {
+        send_usb_midi_message(&clock_byte, 1);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (uart_list_tempo[i] != NULL) {
+            HAL_UART_Transmit(uart_list_tempo[i], &clock_byte, 1, MT_UART_TX_TIMEOUT_MS);
+        }
+    }
+}
 
 void mt_process_pending_tempo_out(void)
 {
-if (save_get(TEMPO_CURRENTLY_SENDING) == 0) {
-		return;
-	}
+    if (save_get(TEMPO_CURRENTLY_SENDING) == 0) {
+        s_mt_divider_phase = 0;
+        return;
+    }
 
-static uint8_t div2 = 0;
-div2 ^= 1;
-if (div2 != 0) {
-	return;
+    s_mt_divider_phase ^= 1;
+    if (s_mt_divider_phase != 0) {
+        return;
+    }
+
+    select_outs_and_send(0xF8);
 }
 
-static uint8_t clock_tick = 0xF8;
-
-UART_HandleTypeDef *UART_list_tempo[2];
-list_of_UART_to_send_to(*mt_send_to_midi_out_cache(), UART_list_tempo);
-
-send_usb_midi_message(&clock_tick, 1);
-for (int i = 0; i < 2; i++) {
-	if (UART_list_tempo[i] != NULL) {
-		HAL_UART_Transmit(UART_list_tempo[i], &clock_tick, 1, 1000);
-		}
-	}
-}
-
-void mt_start_stop(void) {
-	static uint8_t clock_start = 0xFA;
-	static uint8_t clock_stop  = 0xfC;
-
-	static UART_HandleTypeDef *UART_list_tempo[2];
-	list_of_UART_to_send_to(*mt_send_to_midi_out_cache(), UART_list_tempo);
-
-	uint8_t clock_sending = save_get(TEMPO_CURRENTLY_SENDING);
+void mt_start_stop(void)
+{
+    const uint8_t clock_sending = save_get(TEMPO_CURRENTLY_SENDING);
 
     // Stop clock
     if (clock_sending == 0) {
-        for (int i = 0; i < 2; i++) {
-            if (UART_list_tempo[i] != NULL) {
-                HAL_UART_Transmit(UART_list_tempo[i], &clock_stop, 1, 1000);
-            }
-        }
-        send_usb_midi_message(&clock_stop, 1);
+        s_mt_divider_phase = 0;
+        select_outs_and_send(0xFC);
     }
     // Start clock
     else if (clock_sending == 1) {
-        for (int i = 0; i < 2; i++) {
-            if (UART_list_tempo[i] != NULL) {
-                HAL_UART_Transmit(UART_list_tempo[i], &clock_start, 1, 1000);
-            }
-        }
-        send_usb_midi_message(&clock_start, 1);
-
+        s_mt_divider_phase = 0;
+        select_outs_and_send(0xFA);
     }
 }
