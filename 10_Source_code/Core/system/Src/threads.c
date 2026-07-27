@@ -61,29 +61,8 @@ static const osThreadAttr_t s_medium_tasks_attrs = {
 };
 
 
-// -------------------------
-// Display thread
-// -------------------------
-static void DisplayUpdateThread(void *arg)
-{
-    (void)arg;
-    for (;;)
-    {
-        uint32_t f = osEventFlagsWait(
-            s_display_flags,
-            DISPLAY_FLAG_MASK,
-            osFlagsWaitAny,
-            1
-        );
 
-        screen_update_menu(f);
-        osDelay(30);
-    }
-}
-
-// -------------------------
 // MIDI core thread
-// -------------------------
 static void MidiCoreThread(void *argument)
 {
     (void)argument;
@@ -100,7 +79,6 @@ static void MidiCoreThread(void *argument)
             arp_on_tempo_tick();
             --arp_ticks_to_process;
         }
-
         uint32_t tempo_ticks_to_process = threads_take_pending_ticks(&s_pending_tempo_ticks);
         while (tempo_ticks_to_process > 0) {
             mt_process_pending_tempo_out();
@@ -109,13 +87,10 @@ static void MidiCoreThread(void *argument)
     }
 }
 
-// -------------------------
 // Medium tasks thread
-// -------------------------
 static void MediumTasksThread(void *argument)
 {
     (void)argument;
-
     // Initial menu draw trigger
     set_current_menu(CURRENT_MENU, UI_MODIFY_SET, save_get(SETTINGS_START_MENU));
     set_current_menu(OLD_MENU, UI_MODIFY_SET, AMOUNT_OF_MENUS);
@@ -123,12 +98,26 @@ static void MediumTasksThread(void *argument)
     for (;;)
     {
         refresh_menu();
-
         panic_midi(GPIOB, Btn1_Pin, Btn2_Pin);
-
         osDelay(10);
     }
 }
+
+// Display thread
+static void DisplayUpdateThread(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        uint32_t f = osEventFlagsWait(
+            s_display_flags,
+            DISPLAY_FLAG_MASK,
+            osFlagsWaitAny, 1);
+        screen_update_menu(f);
+        osDelay(30);
+    }
+}
+
 
 // -------------------------
 // Public API
